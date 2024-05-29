@@ -33,6 +33,7 @@ contract CascadeLimitOrder is Ownable {
         // TODO: Verify if good token is given with the previous logic
 
         // TODO: Create a limit order with a small range
+        // _placeOrder
 
         // ...
 
@@ -53,15 +54,27 @@ contract CascadeLimitOrder is Ownable {
         // Swap actual token to the other token
 
         // TODO: Create a limit order with a small range on the other tick
+        // _placeOrder
+
+        // tweak isOnFirst
 
         // ...
+    }
+
+    function _placeOrder(
+        address token,
+        uint256 amount,
+        int24 targetPrice,
+        bool isOnFirst
+    ) private {
+        // TODO: Create a limit order with a small range
     }
 
     function cancelOrder(uint256 orderId) external {
         
         // TODO: burn the position
         // TODO: refund the user
-        
+
         delete orders[orderId];
     }
 }
