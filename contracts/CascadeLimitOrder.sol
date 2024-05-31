@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.19;
 
-import "@uniswap/v3-periphery/contracts/interfaces/ISwapRouter.sol";
-import "@uniswap/v3-periphery/contracts/interfaces/INonfungiblePositionManager.sol";
+import "./interfaces/INonfungiblePositionManager.sol";
 import "@uniswap/v3-core/contracts/interfaces/IUniswapV3Pool.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "./interfaces/TransferHelper.sol";
 
 contract CascadeLimitOrder is Ownable {
     struct Order {
@@ -13,9 +13,9 @@ contract CascadeLimitOrder is Ownable {
         int24 upperTargetTick; // For Take-Profit Orders
         bool isOnLower;
         address user;
+        uint256 tokenId;
     }
 
-    ISwapRouter router;
     IUniswapV3Pool pool;
     INonfungiblePositionManager positionManager;
 
@@ -34,11 +34,9 @@ contract CascadeLimitOrder is Ownable {
     event OrderExecuted(uint256 indexed orderId);
 
     constructor(
-        address _router,
         address _pool,
         INonfungiblePositionManager _positionManager
     ) Ownable(msg.sender) {
-        router = ISwapRouter(_router);
         pool = IUniswapV3Pool(_pool);
         positionManager = INonfungiblePositionManager(_positionManager);
         tokenA = IERC20(pool.token0());
@@ -46,70 +44,57 @@ contract CascadeLimitOrder is Ownable {
     }
 
     function placeInitialOrder(
-        address token,
         uint256 amount,
         int24 lowerTargetTick,
-        int24 upperTargetTick
+        int24 upperTargetTick,
+        bool isOnLower
     ) external {
         require(amount > 0, "Amount must be greater than 0");
+        require(
+            lowerTargetTick < upperTargetTick,
+            "Lower target tick must be less than upper target tick"
+        );
 
-        (, int24 tick, , , ) = pool.slot0();
+        (, int24 tick, , , , , ) = pool.slot0();
         int24 tickSpacing = pool.tickSpacing();
 
-        int24 lowerTargetTickSpacing = lowerTargetTickSpacing - tickSpacing;
-        int24 upperTargetTickSpacing = upperTargetTickSpacing + tickSpacing;
+        int24 lowerTargetTickSpacing = lowerTargetTick - tickSpacing;
+        int24 upperTargetTickSpacing = upperTargetTick + tickSpacing;
 
-        bool isInRange = lowerTargetTick < tick && tick < upperTargetTick && lowerTargetTickSpacing < tick && tick < upperTargetTickSpacing;
+        uint256 tokenId;
+        bool isInRange = lowerTargetTick < tick &&
+            tick < upperTargetTick &&
+            lowerTargetTickSpacing < tick &&
+            tick < upperTargetTickSpacing;
+        bool isAbove = upperTargetTick < tick &&
+                upperTargetTickSpacing < tick;
         if (isInRange) {
-            if (token == address(tokenA)) {
-                // Buy Limit Orders
-                _placeOrder(
-                    tokenA,
-                    amount,
-                    lowerTargetTickSpacing,
-                    lowerTargetTick,
-                    true
-                );
-            } else {
-                // Take-Profit Orders
-                _placeOrder(
-                    tokenB,
-                    amount,
-                    upperTargetTick,
-                    upperTargetTickSpacing,
-                    false
-                );
-            }
+            // if isOnLower => Buy Limit Orders, if not => Take-Profit Orders
+            (tokenId) = _placeOrder(
+                isOnLower ? tokenA : tokenB,
+                amount,
+                isOnLower ? lowerTargetTickSpacing : upperTargetTick,
+                isOnLower ? lowerTargetTick : upperTargetTickSpacing,
+                isOnLower
+            );
         } else {
-            if (lowerTargetTick > tick && lowerTargetTickSpacing > tick) {
-                // Take-Profit Orders
-                _placeOrder(
-                    tokenB,
-                    amount,
-                    upperTargetTick,
-                    upperTargetTickSpacing,
-                    false
-                );
-            } else if (upperTargetTick < tick && upperTargetTickSpacing < tick) {
-                // Buy Limit Orders
-                _placeOrder(
-                    tokenA,
-                    amount,
-                    lowerTargetTickSpacing,
-                    lowerTargetTick,
-                    true
-                );
-            }
+            // If is Above  => Buy Limit Orders, if not => Take-Profit Orders
+            (tokenId) = _placeOrder(
+                isAbove ? tokenA : tokenB,
+                amount,
+                isAbove ? lowerTargetTickSpacing : upperTargetTick,
+                isAbove ? lowerTargetTick : upperTargetTickSpacing,
+                isAbove
+            );
         }
-
-        // ...
-
+        
         _orderCount++;
         orders[_orderCount] = Order({
-            firstTargetTick: firstTargetTick,
-            secondTargetTick: secondTargetTick,
-            isOnFirst: true, // TODO: Verify if isOnFirst or isOnSecond with the previous logic
-            user: msg.sender
+            lowerTargetTick: lowerTargetTick,
+            upperTargetTick: upperTargetTick,
+            isOnLower: isInRange ? isOnLower : isAbove,
+            user: msg.sender,
+            tokenId: tokenId
         });
     }
 
@@ -121,35 +106,32 @@ contract CascadeLimitOrder is Ownable {
         // _placeOrder(token, amount, secondTargetPrice)
         // tweak isOnFirst orders[_orderCount].isOnFirst = !orders[_orderCount].isOnFirst;
         // ...
-
-        emit OrderExecuted(tokenId);
+        // emit OrderExecuted(tokenId);
     }
 
     // Create a limit order with a small range
     function _placeOrder(
-        address token,
+        IERC20 token,
         uint256 amount,
         int24 tickLower,
         int24 tickUpper,
-        bool isOnFirst
-    ) private {
+        bool isOnLower
+    ) private returns (uint256) {
         TransferHelper.safeApprove(
-            token,
-            address(nonfungiblePositionManager),
+            address(token),
+            address(positionManager),
             amount
         );
 
-        (uint160 sqrtPriceX96, , , , , , ) = pool.slot0();
-
-        INonfungiblePositionManager.MintParams
-            memory params = INonfungiblePositionManager.MintParams({
-                token0: address(token0),
-                token1: address(token1),
+        INonfungiblePositionManager.MintParams memory params = INonfungiblePositionManager
+            .MintParams({
+                token0: address(tokenA),
+                token1: address(tokenB),
                 fee: pool.fee(),
                 tickLower: tickLower,
                 tickUpper: tickUpper,
-                amount0Desired: isOnFirst ? amount : 0,
-                amount1Desired: isOnFirst ? 0 : amount,
+                amount0Desired: isOnLower ? amount : 0,
+                amount1Desired: isOnLower ? 0 : amount,
                 amount0Min: 0, // TODO: set a slippage tolerance
                 amount1Min: 0, // TODO: set a slippage tolerance
                 recipient: address(this),
@@ -159,6 +141,8 @@ contract CascadeLimitOrder is Ownable {
         (uint256 tokenId, uint128 liquidity, , ) = positionManager.mint(params);
 
         emit OrderPlaced(tokenId, tickLower, tickUpper, liquidity);
+
+        return tokenId;
     }
 
     function cancelOrder(uint256 orderId) external {
