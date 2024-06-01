@@ -1,4 +1,4 @@
-# Automated Cascading Limit Order System on Uniswap V3 🦄
+# Automated Cascading Limit Order System on Uniswap V3 🦄🦄🦄
 
 ## Overview
 
@@ -61,16 +61,3 @@ The proposed solution consists of three main components:
 ## Atomic Transactions
 
 Atomic transactions are achieved using Solidity smart contracts ensuring that the creation of the subsequent order only occurs if the initial order is executed successfully. This prevents any partial executions or loss of funds during the process.
-
-## Smart Contract Implementation
-
-The core smart contract, `CascadingLimitOrder`, includes the following functions:
-
-- `placeInitialOrder(tokenA, amount, firstTargetPrice, secondTargetPrice)`: 
-  Places the initial limit order.
-
-- `executeOrder(orderId)`: 
-  Executes the limit order when the first target price is reached and atomically places the second order with the predetermined second target price using the liquidity from the freshly executed first limit order.
-
-- `cancelOrder(orderId)`: 
-  Allows owners to cancel their orders if needed.
